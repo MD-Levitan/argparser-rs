@@ -57,9 +57,10 @@ struct Arg {
     val: Option<String>,
     count: u16,
     required: bool,
-    flag: char,
+    flag: Option<char>,
     help: String,
     type_: ArgType,
+    block: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +70,7 @@ pub struct ArgParser {
     arguments: HashMap<String, Arg>,
     name: String,
     done: bool,
+    blocks: HashMap<String, Option<String>>,
 }
 
 /// Simple type alias to reduce typing. The return type of
@@ -83,11 +85,12 @@ impl ArgParser {
             arguments: HashMap::new(),
             name: name,
             done: false,
+            blocks: HashMap::new(),
         };
 
-        me.add_opt("help", Some("false"), 'h', false, 
-            "Show this help message", ArgType::Flag);
-        
+        me.add_opt("help", Some("false"), Some('h'), false, 
+            "Show this help message", ArgType::Flag, None);
+
         me
     }
     
@@ -101,13 +104,14 @@ impl ArgParser {
     /// use argparse::{ArgParser, ArgType};
     ///
     /// let mut parser = ArgParser::new("runner".into());
-    /// parser.add_opt("verbose", Some("false"), 'v', false,
-    ///     "Whether to produce verbose output", ArgType::Flag);
+    /// parser.add_opt("verbose", Some("false"), Some('v'), false,
+    ///     "Whether to produce verbose output", ArgType::Flag, Some("Status commands"));
     /// ```
     pub fn add_opt(&mut self, name: &str, 
-        default: Option<&str>, flag: char, required: bool, 
-        help: &str, type_: ArgType) {
+        default: Option<&str>, flag: Option<char>, required: bool, 
+        help: &str, type_: ArgType, block: Option<&str>) {
         
+        let block_ = block.map(|x| x.into()); 
         let o = Arg {
             val: default.map(|x| x.into()), 
             count: 0, 
@@ -115,8 +119,12 @@ impl ArgParser {
             flag: flag,
             help: help.into(),
             type_: type_,
+            block: block_.clone(),
         };
-        
+
+        if let Some(block_str) = block_ {
+            self.blocks.insert(block_str, None);
+        }        
         self.arguments.insert(name.into(), o);
     }
     
@@ -127,11 +135,11 @@ impl ArgParser {
     /// // a long form of `--verbose`, short form of `v`, that is not
     /// // required to be passed, and has a default value of `false`
     ///
-    /// use argparse::{ArgParser, ArgType};
+    /// use argparse_rs::{ArgParser, ArgType};
     ///
     /// let mut parser = ArgParser::new("runner".into());
-    /// parser.add_opt("verbose", Some("false"), 'v', false,
-    ///     "Whether to produce verbose output", ArgType::Flag);
+    /// parser.add_opt("verbose", Some("false"), Some('v'), false,
+    ///     "Whether to produce verbose output", ArgType::Flag, None);
     /// assert!(parser.remove_opt("verbose").is_ok())
     /// ```
     pub fn remove_opt(&mut self, name: &str) -> Result<(), &'static str> {
@@ -146,11 +154,11 @@ impl ArgParser {
     /// // a long form of `--verbose`, short form of `v`, that is not
     /// // required to be passed, and has a default value of `false`
     ///
-    /// use argparse::{ArgParser, ArgType};
+    /// use argparse_rs::{ArgParser, ArgType};
     ///
     /// let mut parser = ArgParser::new("runner".into());
-    /// parser.add_opt("verbose", Some("false"), 'v', false,
-    ///     "Whether to produce verbose output", ArgType::Flag);
+    /// parser.add_opt("verbose", Some("false"), Some('v'), false,
+    ///     "Whether to produce verbose output", ArgType::Flag, None);
     ///
     /// // Normally you'd get this from std::env::args().iter()
     /// let test_1 = "./runner --verbose".split_whitespace()
@@ -174,7 +182,8 @@ impl ArgParser {
         let mut new_args = self.arguments.clone();
         
         for (argname, my_arg) in self.arguments.iter() {
-            for (flag, rest) in argvec.slide().filter(|&(f, _)| {f == &format!("-{}", my_arg.flag) || f == &format!("--{}", argname)}) {
+            for (flag, rest) in argvec.slide().filter(|&(f, _)| {(my_arg.flag.is_some() && f == &format!("-{}", my_arg.flag.unwrap())) 
+                                                                  || f == &format!("--{}", argname)}) {
 
                 if let Entry::Occupied(mut e) = new_args.entry(argname.clone()) {
                     let arg = e.get_mut();
@@ -250,11 +259,11 @@ impl ArgParser {
     /// used
     /// # Example
     /// ```
-    /// use argparse::{ArgParser, ArgType};
+    /// use argparse_rs::{ArgParser, ArgType};
     ///
     /// let mut parser = ArgParser::new("runner".into());
-    /// parser.add_opt("verbose", Some("false"), 'v', false,
-    ///     "Whether to produce verbose output", ArgType::Flag);
+    /// parser.add_opt("verbose", Some("false"), Some('v'), false,
+    ///     "Whether to produce verbose output", ArgType::Flag, None);
     ///
     /// // Normally you'd get this from std::env::args().iter()
     /// let test_1 = "./runner --help".split_whitespace()
@@ -275,9 +284,11 @@ impl ArgParser {
         }
         println!("");
         
-        print!("Options:\n\n");
-        for (argname, info) in self.arguments.iter() {            
-            print!("--{} (-{})\t", argname, info.flag);
+        fn print_info(argname: &str, info: &Arg) {
+            match info.flag {
+                Some(flag) => print!("--{} (-{})\t", argname, flag),
+                None => print!("--{}\t", argname),
+            }            
             print!("Required: {}\t", info.required);
             print!("Type: {}\n", info.type_);
             print!("\t");
@@ -290,11 +301,33 @@ impl ArgParser {
                     print!("\n\t\t");
                     i = 0;
                 }
-                
+                    
                 i = i + 1;
             }
-            
+
             println!("\n");
+        }
+
+        print!("Options:\n\n");
+        for (argname, info) in self.arguments.iter() {
+            if let None = info.block {
+                print_info(argname, info);
+            }
+        }
+        for (block, block_description) in self.blocks.iter() {
+            match block_description {
+                Some(descr) => print!("{}:\t\t{}\n\n", block, descr),        
+                None => print!("{}:\n\n", block), 
+            }
+                
+            for (argname, info) in self.arguments.iter() {
+                
+                if let Some(block_str) = &info.block {
+                    if block_str == block{
+                        print_info(argname, info);
+                    }
+                }
+            }
         }
     }
 }
@@ -328,11 +361,11 @@ impl ArgParseResults {
     /// `FromStr`
     /// # Example
     /// ```
-    /// use argparse::{ArgParser, ArgType};
+    /// use argparse_rs::{ArgParser, ArgType};
     ///
     /// let mut parser = ArgParser::new("runner".into());
-    /// parser.add_opt("verbose", Some("false"), 'v', false,
-    ///     "Whether to produce verbose output", ArgType::Flag);
+    /// parser.add_opt("verbose", Some("false"), Some('v'), false,
+    ///     "Whether to produce verbose output", ArgType::Flag, None);
     ///
     /// // Normally you'd get this from std::env::args().iter()
     /// let test_1 = "./runner -v".split_whitespace()
@@ -360,11 +393,11 @@ impl ArgParseResults {
     /// 
     /// # Example
     /// ```
-    /// use argparse::{ArgParser, ArgType};
+    /// use argparse_rs::{ArgParser, ArgType};
     ///
     /// let mut parser = ArgParser::new("runner".into());
-    /// parser.add_opt("verbose", Some("false"), 'v', false,
-    ///     "Whether to produce verbose output", ArgType::Flag);
+    /// parser.add_opt("verbose", Some("false"), Some('v'), false,
+    ///     "Whether to produce verbose output", ArgType::Flag, None);
     ///
     /// // Normally you'd get this from std::env::args().iter()
     /// let test_1 = "./runner -v".split_whitespace()
@@ -541,11 +574,11 @@ mod test {
     fn setup_1() -> ArgParser {
         let mut parser = ArgParser::new("ArgParsers".into());
         
-        parser.add_opt("length", None, 'l', true, LONG_STR, ArgType::Option);
-        parser.add_opt("height", None, 'h', true, "Height of user in centimeters", ArgType::Option);
-        parser.add_opt("name", None, 'n', true, "Name of user", ArgType::Option);
-        parser.add_opt("frequencies", None, 'f', false, "User's favorite frequencies", ArgType::List);
-        parser.add_opt("mao", Some("false"), 'm', false, "Is the User Chairman Mao?", ArgType::Flag);
+        parser.add_opt("length", None, Some('l'), true, LONG_STR, ArgType::Option, None);
+        parser.add_opt("height", None, Some('h'), true, "Height of user in centimeters", ArgType::Option, None);
+        parser.add_opt("name", None, Some('n'), true, "Name of user", ArgType::Option, None);
+        parser.add_opt("frequencies", None, Some('f'), false, "User's favorite frequencies", ArgType::List, None);
+        parser.add_opt("mao", Some("false"), Some('m'), false, "Is the User Chairman Mao?", ArgType::Flag, None);
         
         parser
     }
@@ -612,7 +645,7 @@ mod test {
     #[test]
     fn test_parser_dict() {
         let mut parser = setup_1();
-        parser.add_opt("socks", None, 's', false, "If you wear socks that day", ArgType::Dict);
+        parser.add_opt("socks", None, Some('s'), false, "If you wear socks that day", ArgType::Dict, None);
         
         let test_1 = "./go -l -60 -h -6001.45e-2 -n Johnny -s Monday:true Friday:false".split_whitespace()
             .map(|s| s.into())
@@ -641,10 +674,10 @@ mod test {
     fn test_parser_positional() {
         let mut parser = setup_1();
         
-        parser.add_opt("csv", None, 'c', true, "csv input file",
-            ArgType::Positional(0));
-        parser.add_opt("json", None, 'j', true, "json output file",
-            ArgType::Positional(1));
+        parser.add_opt("csv", None, Some('c'), true, "csv input file",
+            ArgType::Positional(0), None);
+        parser.add_opt("json", None, Some('j'), true, "json output file",
+            ArgType::Positional(1), None);
         
         let test_1 = "./go -l -60 -h -6001.45e-2 -n Johnny crap.csv crap.json".split_whitespace()
             .map(|s| s.into())
