@@ -71,6 +71,8 @@ pub struct ArgParser {
     name: String,
     done: bool,
     blocks: HashMap<String, Option<String>>,
+    required: bool,
+    type_: bool
 }
 
 /// Simple type alias to reduce typing. The return type of
@@ -80,12 +82,14 @@ pub type ParseResult = Result<ArgParseResults, String>;
 impl ArgParser {
     /// Constructs a new `ArgParser`, given the name of the program
     /// that you want to be printed in help messages
-    pub fn new(name: String) -> ArgParser {
+    pub fn new(name: String, required: bool, type_: bool) -> ArgParser {
         let mut me = ArgParser {
             arguments: HashMap::new(),
             name: name,
             done: false,
             blocks: HashMap::new(),
+            required: required,
+            type_: type_
         };
 
         me.add_opt("help", Some("false"), Some('h'), false, 
@@ -123,7 +127,7 @@ impl ArgParser {
         };
 
         if let Some(block_str) = block_ {
-            self.blocks.insert(block_str, None);
+            self.blocks.entry(block_str).or_insert(None);
         }        
         self.arguments.insert(name.into(), o);
     }
@@ -147,6 +151,48 @@ impl ArgParser {
         self.arguments.remove(name).map(|_| ()).ok_or("No such Option")
     }
     
+    /// Add another block with description.
+    /// # Example
+    /// ```
+    /// // add an option that is a `Flag`, with no default value, with
+    /// // a long form of `--verbose`, short form of `v`, that is not
+    /// // required to be passed, and has a default value of `false`
+    ///
+    /// use argparse_rs::{ArgParser, ArgType};
+    ///
+    /// let mut parser = ArgParser::new("runner".into());
+    /// parser.add_block("Controls", Some("These options can be used to control application"));
+    /// parser.add_opt("verbose", Some("false"), Some('v'), false,
+    ///     "Whether to produce verbose output", ArgType::Flag, Some("Controls"));
+    /// ```   
+    pub fn add_block(&mut self, block: &str, description: Option<&str>)
+    {
+        match description {
+            Some(desc) => self.blocks.insert(block.into(), Some(desc.into())),
+            None => self.blocks.insert(block.into(), None),
+        };
+    }
+
+    /// Remove the block from parser.
+    /// # Example
+    /// ```
+    /// // add an option that is a `Flag`, with no default value, with
+    /// // a long form of `--verbose`, short form of `v`, that is not
+    /// // required to be passed, and has a default value of `false`
+    ///
+    /// use argparse_rs::{ArgParser, ArgType};
+    ///
+    /// let mut parser = ArgParser::new("runner".into());
+    /// parser.add_block("Controls", Some("These options can be used to control application"));
+    /// parser.add_opt("verbose", Some("false"), Some('v'), false,
+    ///     "Whether to produce verbose output", ArgType::Flag, Some("Controls"));
+    /// assert!(parser.remove_block("Controls").is_ok())
+    /// ```   
+    pub fn remove_block(&mut self, block: &str)-> Result<(), &'static str>
+    {
+       self.blocks.remove(block.into()).map(|_| ()).ok_or("No such Block")
+    }
+
     /// Parse a set of arguments, given the previous configuration
     /// # Example
     /// ```
@@ -282,16 +328,17 @@ impl ArgParser {
         for (argname, info) in self.arguments.iter() {
             print!("[--{} {}] ", argname, ops(info, argname));
         }
-        println!("");
+        println!("\n");
         
-        fn print_info(argname: &str, info: &Arg) {
-            match info.flag {
-                Some(flag) => print!("--{} (-{})\t", argname, flag),
-                None => print!("--{}\t", argname),
-            }            
-            print!("Required: {}\t", info.required);
-            print!("Type: {}\n", info.type_);
-            print!("\t");
+        fn print_info(argname: &str, info: &Arg, required: bool, type_: bool) {
+            let info_str: String = match info.flag {
+                Some(flag) => format!("--{} (-{})", argname, flag),
+                None => format!("--{}", argname),
+            };
+            let indent: usize = info_str.len();            
+            print!("{}", info_str);
+            
+            print!("{}", std::iter::repeat(" ").take(20 - indent).collect::<String>());
             
             let mut i = 0;
             for c in info.help.chars() {
@@ -304,27 +351,32 @@ impl ArgParser {
                     
                 i = i + 1;
             }
-
-            println!("\n");
+            if required {
+                print!("Required: {}\t", info.required);
+            }
+            if type_ {
+                print!("Type: {}\n", info.type_);
+            }
+            
+            print!("\n");
         }
 
-        print!("Options:\n\n");
+        print!("Options:\n");
         for (argname, info) in self.arguments.iter() {
             if let None = info.block {
-                print_info(argname, info);
+                print_info(argname, info, self.required, self.type_);
             }
         }
         for (block, block_description) in self.blocks.iter() {
             match block_description {
-                Some(descr) => print!("{}:\t\t{}\n\n", block, descr),        
-                None => print!("{}:\n\n", block), 
+                Some(descr) => print!("\n {}:\n  {}\n", block, descr),        
+                None => print!("\n {}:\n", block), 
             }
-                
             for (argname, info) in self.arguments.iter() {
-                
                 if let Some(block_str) = &info.block {
                     if block_str == block{
-                        print_info(argname, info);
+                        print!("  ");
+                        print_info(argname, info, self.required, self.type_);
                     }
                 }
             }
